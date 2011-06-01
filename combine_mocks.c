@@ -118,7 +118,6 @@ int main(int argc, char *argv[])
       fits_report_error(stderr, rv);
       exit(1);
    }
-   printf("Opened files\n");
    pfo = pflower;               //Copy all lower band variables into the output struct
    if (!cmd->outputbasenameP)
       sprintf(pfo.basefilename, basename(outfilename));
