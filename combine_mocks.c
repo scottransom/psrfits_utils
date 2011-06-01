@@ -118,6 +118,7 @@ int main(int argc, char *argv[])
       fits_report_error(stderr, rv);
       exit(1);
    }
+   printf("Opened files\n");
    pfo = pflower;               //Copy all lower band variables into the output struct
    if (!cmd->outputbasenameP)
       sprintf(pfo.basefilename, basename(outfilename));
@@ -144,20 +145,22 @@ int main(int argc, char *argv[])
    int nchan = pflower.hdr.nchan;
    int outnchan;
    int npol = pflower.hdr.npol;
-   int nbits = pflower.hdr.nbits;
+   int nbits = pflower.hdr.nbits*2;
    int nsblk = pflower.hdr.nsblk;
    //Allocate memory for all upper and lower data
    pflower.sub.dat_freqs = (float *) malloc(sizeof(float) * nchan);
    pflower.sub.dat_weights = (float *) malloc(sizeof(float) * nchan);
    pflower.sub.dat_offsets = (float *) malloc(sizeof(float) * nchan * npol);
    pflower.sub.dat_scales = (float *) malloc(sizeof(float) * nchan * npol);
-   pflower.sub.data = (unsigned char *) malloc(pflower.sub.bytes_per_subint);
+   pflower.sub.rawdata = (unsigned char *) malloc(pflower.sub.bytes_per_subint);
+   pflower.sub.data = (unsigned char *) malloc(pflower.sub.bytes_per_subint*2);
 
    pfupper.sub.dat_freqs = (float *) malloc(sizeof(float) * nchan);
    pfupper.sub.dat_weights = (float *) malloc(sizeof(float) * nchan);
    pfupper.sub.dat_offsets = (float *) malloc(sizeof(float) * nchan * npol);
    pfupper.sub.dat_scales = (float *) malloc(sizeof(float) * nchan * npol);
-   pfupper.sub.data = (unsigned char *) malloc(pfupper.sub.bytes_per_subint);
+   pfupper.sub.rawdata = (unsigned char *) malloc(pfupper.sub.bytes_per_subint);
+   pfupper.sub.data = (unsigned char *) malloc(pfupper.sub.bytes_per_subint*2);
 
    int firsttime = 1;           //First time through do while loop
    do {
@@ -206,7 +209,8 @@ int main(int argc, char *argv[])
          pfo.sub.dat_weights = (float *) malloc(sizeof(float) * outnchan);
          pfo.sub.dat_offsets = (float *) malloc(sizeof(float) * outnchan * npol);
          pfo.sub.dat_scales = (float *) malloc(sizeof(float) * outnchan * npol);
-         pfo.sub.data = (unsigned char *) malloc(pfo.sub.bytes_per_subint);
+         pfo.sub.rawdata = (unsigned char *) malloc(pfo.sub.bytes_per_subint);
+         pfo.sub.data = (unsigned char *) malloc(pfo.sub.bytes_per_subint*2);
          newuppernchan = nchan - upchanskip;    //The number of channels to copy from the upper sideband.
          newlowernchan = nchan - lowchanskip;   //The number of channels to copy from the lower sideband.
 
