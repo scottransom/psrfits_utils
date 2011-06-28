@@ -316,7 +316,7 @@ int main(int argc, char *argv[])
          } else {
          }
       }
-   } while (pfo.rownum < pfo.rows_per_file);
+   } while (pfo.rownum <= pfo.rows_per_file);
    printf("Closing file '%s'\n", pflower.filename);
    fits_close_file(pfupper.fptr, &status);
    printf("Closing file '%s'\n", pfupper.filename);
