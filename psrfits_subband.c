@@ -15,7 +15,7 @@
 
 extern double delay_from_dm(double dm, double freq_emitted);
 extern int split_root_suffix(char *input, char **root, char **suffix);
-extern void avg_std(char *x, int n, double *mean, double *std, int stride);
+extern void avg_std(float *x, int n, double *mean, double *std, int stride);
 extern void split_path_file(char *input, char **path, char **file);
 
 struct subband_info {
@@ -74,7 +74,7 @@ void get_chan_stats(struct psrfits *pfi, struct subband_info *si){
 
     for (ii = 0 ; ii < si->bufwid ; ii++) {
         // Only use 1/8 of the total length in order to speed things up
-        avg_std((char *)(pfi->sub.data+ii), si->buflen/8, &avg, &std, si->bufwid);
+        avg_std(pfi->sub.fdata+ii, si->buflen/8, &avg, &std, si->bufwid);
         si->chan_avgs[ii] = avg;
         si->chan_stds[ii] = std;
     }
@@ -86,7 +86,8 @@ void get_sub_stats(struct psrfits *pfo, struct subband_info *si) {
     double avg, std;
 
     for (ii = 0 ; ii < stride ; ii++) {
-        avg_std((char *)(pfo->sub.data+ii), si->buflen, &avg, &std, stride);
+        avg_std(pfo->sub.fdata+ii, si->buflen, &avg, &std, stride);
+        // printf("%d %f %f\n", ii, avg, std);
     }
 }
 
@@ -227,8 +228,14 @@ void init_subbanding(int nsub, double dm,
                                           * pfi->hdr.nchan * pfi->hdr.npol);
     pfi->sub.dat_scales  = (float *)malloc(sizeof(float)
                                           * pfi->hdr.nchan * pfi->hdr.npol);
+    pfi->sub.rawdata = (unsigned char *)malloc(pfi->sub.bytes_per_subint);
     // This is temporary...
-    pfi->sub.data = (unsigned char *)malloc(pfi->sub.bytes_per_subint);
+    if (pfi->hdr.nbits!=8) {
+        pfi->sub.data = (unsigned char *)malloc(pfi->sub.bytes_per_subint *
+                                                (8 / pfi->hdr.nbits));
+    } else {
+        pfi->sub.data = pfi->sub.rawdata;
+    }
         
     // Read the first row of data
     psrfits_read_subint(pfi);
@@ -304,7 +311,8 @@ void init_subbanding(int nsub, double dm,
                                          si->bufwid, sizeof(unsigned char));
     // The input data will be stored directly in the buffer space
     // So the following is really just an offset into the bigger buffer
-    free(pfi->sub.data);  // Free the temporary allocation from above
+    if (pfi->hdr.nbits!=8)
+        free(pfi->sub.data);  // Free the temporary allocation from above
     pfi->sub.data = si->buffer + si->max_overlap * si->bufwid * sizeof(unsigned char);
     // We need the following since we do out-of-place subbanding
     si->outbuffer = (unsigned char *)calloc(si->nsub * si->npol * si->buflen, 
@@ -431,7 +439,7 @@ int main(int argc, char *argv[]) {
     pfi.tot_rows = pfi.N = pfi.T = pfi.status = 0;
     pfi.filenum = cmd->startfile;
     pfi.filename[0] = '\0';
-    sprintf(pfi.basefilename, cmd->argv[0]);
+    strncpy(pfi.basefilename, cmd->argv[0], 199);
     int rv = psrfits_open(&pfi);
     if (rv) { fits_report_error(stderr, rv); exit(1); }
 
@@ -454,6 +462,8 @@ int main(int argc, char *argv[]) {
 
     // Update the output PSRFITS structure
     set_output_vals(&pfi, &pfo, &si, cmd);
+    if (cmd->outputbasenameP)
+      sprintf(pfo.basefilename, cmd->outputbasename);
 
     // Loop through the data
     do {
