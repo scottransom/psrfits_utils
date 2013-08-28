@@ -26,7 +26,7 @@ libpsrfits_utils_la_SOURCES = \
 LDADD = libpsrfits_utils.la
 AM_CPPFLAGS = -DPSRFITS_TEMPLATE_DIR='"$(datadir)"'
 
-bin_PROGRAMS = fold_psrfits psrfits_singlepulse psrfits_subband combine_mocks merge_psrfits
+bin_PROGRAMS = fold_psrfits psrfits_singlepulse psrfits_subband combine_mocks merge_psrfits fits_extract
 
 fold_psrfits_CFLAGS = @PTHREAD_CFLAGS@ $(AM_CFLAGS)
 fold_psrfits_LDFLAGS = @PTHREAD_CFLAGS@ $(AM_LDFLAGS)
@@ -44,3 +44,5 @@ merge_psrfits_SOURCES = merge_psrfits.c \
 merge_psrfits_CFLAGS = @PTHREAD_CFLAGS@ $(AM_CFLAGS)
 merge_psrfits_LDFLAGS = @PTHREAD_CFLAGS@ $(AM_LDFLAGS)
 merge_psrfits_LDADD = libpsrfits_utils.la @PTHREAD_LIBS@
+
+fits_extract_SOURCES = fits_extract.c
