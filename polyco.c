@@ -235,6 +235,10 @@ char telescope_name_to_code(const char *name) {
     if (strncasecmp(name, "Arecibo",7)==0) return('3');
     if (strcasecmp(name, "AO")==0) return('3');
 
+    if (strcasecmp(name, "NC")==0) return('f');
+    if (strcasecmp(name, "Nancay")==0) return('f');
+    if (strcasecmp(name, "NRT")==0) return('f');
+
     /* Not found, return null */
     return('\0');
 }
