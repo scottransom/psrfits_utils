@@ -700,8 +700,10 @@ int main(int argc, char *argv[]) {
         input_open = filterbank_open;
         input_read_subint = filterbank_read_subint;
         input_read_part_DATA = filterbank_read_part_DATA;
-        // Filterbank input: a single explicit file, no PSRFITS validation
-        // or dynamic sequence-number filename generation.
+        // Filterbank input: one or more explicit files (no PSRFITS
+        // validation or dynamic sequence-number filename generation).
+        // cmd->argc/argv are Clig's parsed leftover "infile ..." list, so
+        // this already captures every filename given on the command line.
         pfi.numfiles = cmd->argc;
         pfi.filenum = 0;
         pfi.filenames = cmd->argv;

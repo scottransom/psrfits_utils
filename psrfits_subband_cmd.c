@@ -808,7 +808,7 @@ usage(void)
   fprintf(stderr,"%s","          -tgtavg: Target avg for UNSIGNED data. If 0, set in code based on outbits\n");
   fprintf(stderr,"%s","                   1 float value between 0.0 and 100000.0\n");
   fprintf(stderr,"%s","                   default: `0.0'\n");
-  fprintf(stderr,"%s","      -filterbank: Raw data in SIGPROC filterbank format (single input file only)\n");
+  fprintf(stderr,"%s","      -filterbank: Raw data in SIGPROC filterbank format (one or more sequential files from the same observation)\n");
   fprintf(stderr,"%s","           -onlyI: Only output total intensity data\n");
   fprintf(stderr,"%s","    -adjustlevels: Adjust output scales and offsets every row (default is only row 0)\n");
   fprintf(stderr,"%s","         -weights: Filename containing ASCII list of channels and weights to use\n");

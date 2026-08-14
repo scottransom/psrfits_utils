@@ -267,47 +267,174 @@ static const char *machine_name(int id)
     }
 }
 
-/* --- Module state for the (single) open filterbank file. --- */
+/* --- Module state for the (possibly multi-file) filterbank sequence.
+ * The whole sequence is treated as one continuous virtual sample stream:
+ * unlike PSRFITS (where NSBLK guarantees every row divides evenly within
+ * a file), a filterbank file's sample count need not be a multiple of our
+ * chosen block size, so a single block read can legitimately span two
+ * files. fb_read_global() below is the one place that crosses that
+ * boundary; everything else just asks it for samples starting at a given
+ * position in the concatenated stream. --- */
 static FILE *fb_file = NULL;
-static sigprocfb fb_hdr;
-static long long fb_headerlen = 0;
+static int fb_open_idx = -1;                /* index into fb_filenames of fb_file, -1 = none open */
+static char **fb_filenames = NULL;          /* alias of pf->filenames, not owned */
+static int fb_numfiles = 0;
+static long long *fb_file_headerlen = NULL; /* per-file header length, bytes */
+static long long *fb_file_nsamples = NULL;  /* per-file sample count */
+static long long *fb_file_start = NULL;     /* prefix sums; size fb_numfiles+1 */
+static sigprocfb fb_hdr;                    /* file 0's header -- canonical format */
 static long long fb_bytes_per_sample_row = 0;  /* nchans*nifs*nbits/8 */
-static long long fb_cur_sample_offset = 0;     /* "committed" position, in spectra */
-static long long fb_total_samples = 0;
+static long long fb_global_pos = 0;         /* "committed" position, in spectra, across all files */
+static long long fb_total_samples = 0;      /* sum across all files */
+
+
+static void fb_ensure_open(int idx)
+{
+    if (fb_open_idx == idx && fb_file != NULL)
+        return;
+    if (fb_file) {
+        fclose(fb_file);
+        fb_file = NULL;
+    }
+    fb_file = fopen(fb_filenames[idx], "rb");
+    if (fb_file == NULL) {
+        fprintf(stderr, "Error: could not open filterbank file '%s'\n",
+                fb_filenames[idx]);
+        exit(1);
+    }
+    fb_open_idx = idx;
+}
+
+
+static int fb_file_for_global(long long global_pos)
+{
+    int i;
+    for (i = 0; i < fb_numfiles; i++)
+        if (global_pos < fb_file_start[i + 1])
+            return i;
+    return fb_numfiles;  /* past the end of the last file */
+}
+
+
+/* Read `nspec` sample-rows starting at global sample index `global_pos`
+ * (0-based, across the whole concatenated file sequence) into `buf`,
+ * transparently crossing file boundaries as needed. Returns the number of
+ * rows actually read (< nspec at true end-of-sequence or a short read),
+ * matching fread()'s partial-read convention. Purely a function of
+ * `global_pos` -- no side effects on any "current position" state -- so
+ * it works equally for a committed read (advance afterward) or a
+ * non-committing peek (don't). */
+static long long fb_read_global(long long global_pos, long long nspec, unsigned char *buf)
+{
+    long long remaining = nspec, pos = global_pos;
+    unsigned char *ptr = buf;
+
+    while (remaining > 0) {
+        int idx = fb_file_for_global(pos);
+        long long within_file, avail_in_file, this_read, nread;
+        if (idx >= fb_numfiles)
+            break;
+        fb_ensure_open(idx);
+        within_file = pos - fb_file_start[idx];
+        avail_in_file = fb_file_nsamples[idx] - within_file;
+        this_read = (remaining < avail_in_file) ? remaining : avail_in_file;
+        fseeko(fb_file, fb_file_headerlen[idx] + within_file * fb_bytes_per_sample_row,
+               SEEK_SET);
+        nread = fread(ptr, fb_bytes_per_sample_row, this_read, fb_file);
+        ptr += nread * fb_bytes_per_sample_row;
+        pos += nread;
+        remaining -= nread;
+        if (nread < this_read)
+            break;  /* short read / unexpected EOF within a file */
+    }
+    return nspec - remaining;
+}
 
 
 int filterbank_open(struct psrfits *pf)
 {
     struct hdrinfo *hdr = &(pf->hdr);
-    long long filelen;
+    int i;
 
-    /* psrfits_set_files() already validated argv/basefilename bookkeeping;
-     * for filterbank we require a single explicit input file. */
-    if (pf->numfiles == 0 || pf->numfiles > 1) {
-        fprintf(stderr,
-                "Error: -filterbank requires exactly one input file "
-                "(got %d).\n", pf->numfiles);
-        pf->status = 1;
-        return pf->status;
-    }
-    strncpy(pf->filename, pf->filenames[0], 200);
-
-    fb_file = fopen(pf->filename, "rb");
-    if (fb_file == NULL) {
-        fprintf(stderr, "Error: could not open filterbank file '%s'\n",
-                pf->filename);
+    if (pf->numfiles == 0) {
+        fprintf(stderr, "Error: -filterbank requires at least one input file.\n");
         pf->status = 1;
         return pf->status;
     }
 
-    if (!read_filterbank_header(&fb_hdr, fb_file, &fb_headerlen)) {
-        fprintf(stderr,
-                "Error: '%s' does not look like a SIGPROC filterbank file "
-                "(no HEADER_START).\n", pf->filename);
-        pf->status = 1;
-        return pf->status;
+    fb_numfiles = pf->numfiles;
+    fb_filenames = pf->filenames;
+    fb_file_headerlen = (long long *)malloc(sizeof(long long) * fb_numfiles);
+    fb_file_nsamples = (long long *)malloc(sizeof(long long) * fb_numfiles);
+    fb_file_start = (long long *)malloc(sizeof(long long) * (fb_numfiles + 1));
+
+    for (i = 0; i < fb_numfiles; i++) {
+        sigprocfb this_hdr;
+        long long this_headerlen, filelen, this_bytes_per_row;
+        FILE *f = fopen(fb_filenames[i], "rb");
+        if (f == NULL) {
+            fprintf(stderr, "Error: could not open filterbank file '%s'\n",
+                    fb_filenames[i]);
+            pf->status = 1;
+            return pf->status;
+        }
+        if (!read_filterbank_header(&this_hdr, f, &this_headerlen)) {
+            fprintf(stderr,
+                    "Error: '%s' does not look like a SIGPROC filterbank file "
+                    "(no HEADER_START).\n", fb_filenames[i]);
+            fclose(f);
+            pf->status = 1;
+            return pf->status;
+        }
+        if (i == 0) {
+            fb_hdr = this_hdr;  /* canonical format reference for the whole sequence */
+        } else {
+            /* Structural mismatches would misalign every read after this
+             * file (wrong byte stride/channel count) -- hard error. */
+            if (this_hdr.nchans != fb_hdr.nchans || this_hdr.nbits != fb_hdr.nbits ||
+                this_hdr.nifs != fb_hdr.nifs) {
+                fprintf(stderr,
+                        "Error: '%s' (nchans=%d nbits=%d nifs=%d) doesn't match "
+                        "'%s' (nchans=%d nbits=%d nifs=%d) -- can't treat these "
+                        "as one contiguous observation.\n",
+                        fb_filenames[i], this_hdr.nchans, this_hdr.nbits, this_hdr.nifs,
+                        fb_filenames[0], fb_hdr.nchans, fb_hdr.nbits, fb_hdr.nifs);
+                fclose(f);
+                pf->status = 1;
+                return pf->status;
+            }
+            /* Frequency-labeling mismatches don't affect the byte layout,
+             * so just warn (mirroring PSRFITS's own soft warnings for
+             * mismatched TELESCOP etc. across a multi-file set). */
+            if (fabs(this_hdr.fch1 - fb_hdr.fch1) > 1e-6 ||
+                fabs(this_hdr.foff - fb_hdr.foff) > 1e-9) {
+                fprintf(stderr,
+                        "Warning: '%s' (fch1=%.6f foff=%.6f) doesn't match '%s' "
+                        "(fch1=%.6f foff=%.6f); using file 0's frequencies for "
+                        "the whole sequence.\n",
+                        fb_filenames[i], this_hdr.fch1, this_hdr.foff,
+                        fb_filenames[0], fb_hdr.fch1, fb_hdr.foff);
+            }
+        }
+
+        this_bytes_per_row = ((long long)this_hdr.nchans * this_hdr.nifs * this_hdr.nbits) / 8;
+        fseeko(f, 0, SEEK_END);
+        filelen = ftello(f);
+        fclose(f);
+
+        fb_file_headerlen[i] = this_headerlen;
+        fb_file_nsamples[i] = (filelen - this_headerlen) / this_bytes_per_row;
+        printf("Found filterbank file '%s': %lld spectra\n",
+               fb_filenames[i], (long long)fb_file_nsamples[i]);
     }
-    printf("Opened filterbank file '%s'\n", pf->filename);
+
+    fb_file_start[0] = 0;
+    for (i = 0; i < fb_numfiles; i++)
+        fb_file_start[i + 1] = fb_file_start[i] + fb_file_nsamples[i];
+    fb_total_samples = fb_file_start[fb_numfiles];
+    strncpy(pf->filename, fb_filenames[0], 200);
+    printf("Opened %d filterbank file(s), %lld total spectra.\n",
+           fb_numfiles, (long long)fb_total_samples);
 
     if (fb_hdr.nbits != 8) {
         fprintf(stderr,
@@ -399,18 +526,14 @@ int filterbank_open(struct psrfits *pf)
      * the moment filterbank_read_subint() fread()s a full row into it. */
     pf->sub.bytes_per_subint = (int)(fb_bytes_per_sample_row * hdr->nsblk);
 
-    fseeko(fb_file, 0, SEEK_END);
-    filelen = ftello(fb_file);
-    fb_total_samples = (filelen - fb_headerlen) / fb_bytes_per_sample_row;
-    fseeko(fb_file, fb_headerlen, SEEK_SET);
-
     pf->rownum = 1;
     pf->tot_rows = 0;
     pf->rows_per_file = (int)(fb_total_samples / hdr->nsblk);
     pf->N = 0;
     pf->T = 0.0;
     pf->status = 0;
-    fb_cur_sample_offset = 0;
+    fb_global_pos = 0;
+    fb_open_idx = -1;
 
     return 0;
 }
@@ -469,8 +592,8 @@ int filterbank_read_subint(struct psrfits *pf)
     int ii;
     long long nread;
 
-    if (fb_cur_sample_offset + hdr->nsblk > fb_total_samples) {
-        printf("Finished with filterbank input file.\n");
+    if (fb_global_pos + hdr->nsblk > fb_total_samples) {
+        printf("Finished with filterbank input file(s).\n");
         pf->status = 1;
         return pf->status;
     }
@@ -484,11 +607,12 @@ int filterbank_read_subint(struct psrfits *pf)
         sub->dat_scales[ii] = 1.0;
     }
 
-    fseeko(fb_file, fb_headerlen + fb_cur_sample_offset * fb_bytes_per_sample_row,
-           SEEK_SET);
-    nread = fread(sub->rawdata, fb_bytes_per_sample_row, hdr->nsblk, fb_file);
+    /* May transparently cross into the next file if hdr->nsblk doesn't
+     * evenly divide the current file's remaining samples -- see
+     * fb_read_global()'s comment. */
+    nread = fb_read_global(fb_global_pos, hdr->nsblk, sub->rawdata);
     if (nread != hdr->nsblk) {
-        printf("Finished with filterbank input file (short read).\n");
+        printf("Finished with filterbank input file(s) (short read).\n");
         pf->status = 1;
         return pf->status;
     }
@@ -500,7 +624,7 @@ int filterbank_read_subint(struct psrfits *pf)
     sub->feed_ang = 0.0; sub->pos_ang = 0.0; sub->par_ang = 0.0;
     sub->tel_az = 0.0; sub->tel_zen = 0.0;
 
-    fb_cur_sample_offset += hdr->nsblk;
+    fb_global_pos += hdr->nsblk;
     pf->rownum++;
     pf->tot_rows++;
     pf->status = 0;
@@ -512,8 +636,7 @@ int filterbank_read_part_DATA(struct psrfits *pf, int N, int numunsigned,
                               float *fbuffer)
 {
     struct hdrinfo *hdr = &(pf->hdr);
-    long long bytes_to_read = (long long)N * fb_bytes_per_sample_row / hdr->nsblk
-                               * hdr->nsblk;  /* placeholder, recomputed below */
+    long long bytes_to_read;
     unsigned char *buffer;
     long long nread;
     (void)numunsigned;  /* filterbank data is already single-Stokes; no
@@ -522,7 +645,7 @@ int filterbank_read_part_DATA(struct psrfits *pf, int N, int numunsigned,
     bytes_to_read = ((long long)hdr->nchan * hdr->npol * N * hdr->nbits) / 8;
     buffer = (unsigned char *)malloc(bytes_to_read);
 
-    if (fb_cur_sample_offset + N > fb_total_samples) {
+    if (fb_global_pos + N > fb_total_samples) {
         free(buffer);
         pf->status = 1;
         return pf->status;
@@ -532,10 +655,11 @@ int filterbank_read_part_DATA(struct psrfits *pf, int N, int numunsigned,
      * position -- filterbank_read_subint() (called right after this, in
      * get_current_row()) is what actually commits the advance, exactly
      * matching psrfits_read_part_DATA()/psrfits_read_subint()'s division
-     * of labor for PSRFITS input. */
-    fseeko(fb_file, fb_headerlen + fb_cur_sample_offset * fb_bytes_per_sample_row,
-           SEEK_SET);
-    nread = fread(buffer, fb_bytes_per_sample_row, N, fb_file);
+     * of labor for PSRFITS input. fb_read_global() takes an explicit
+     * position and has no side effects, so "peeking" is simply passing
+     * fb_global_pos without updating it afterward -- no save/restore of
+     * file-open state needed even if the peek spans a file boundary. */
+    nread = fb_read_global(fb_global_pos, N, buffer);
     if (nread != N) {
         free(buffer);
         pf->status = 1;
@@ -555,5 +679,9 @@ int filterbank_close(void)
         fclose(fb_file);
         fb_file = NULL;
     }
+    fb_open_idx = -1;
+    free(fb_file_headerlen); fb_file_headerlen = NULL;
+    free(fb_file_nsamples); fb_file_nsamples = NULL;
+    free(fb_file_start); fb_file_start = NULL;
     return 0;
 }
