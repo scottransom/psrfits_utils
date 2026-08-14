@@ -62,6 +62,8 @@ static Cmdline cmd = {
   /* tgtavgP = */ 1,
   /* tgtavg = */ 0.0,
   /* tgtavgC = */ 1,
+  /***** -filterbank: Raw data in SIGPROC filterbank format */
+  /* filterbankP = */ 0,
   /***** -onlyI: Only output total intensity data */
   /* onlyIP = */ 0,
   /***** -adjustlevels: Adjust output scales and offsets every row (default is only row 0) */
@@ -777,7 +779,7 @@ catArgv(int argc, char **argv)
 void
 usage(void)
 {
-  fprintf(stderr,"%s","   [-dm dm] [-nsub nsub] [-dstime dstime] [-startfile startfile] [-numfiles numfiles] [-outbits outbits] [-filetime filetime] [-filelen filelen] [-tgtstd tgtstd] [-tgtavg tgtavg] [-onlyI] [-adjustlevels] [-weights wgtsfile] [-bandpass bandpassfile] [-o outputbasename] [--] infile ...\n");
+  fprintf(stderr,"%s","   [-dm dm] [-nsub nsub] [-dstime dstime] [-startfile startfile] [-numfiles numfiles] [-outbits outbits] [-filetime filetime] [-filelen filelen] [-tgtstd tgtstd] [-tgtavg tgtavg] [-filterbank] [-onlyI] [-adjustlevels] [-weights wgtsfile] [-bandpass bandpassfile] [-o outputbasename] [--] infile ...\n");
   fprintf(stderr,"%s","      \n");
   fprintf(stderr,"%s","      Partially de-disperse and subband PSRFITS search-mode data.\n");
   fprintf(stderr,"%s","      \n");
@@ -806,6 +808,7 @@ usage(void)
   fprintf(stderr,"%s","          -tgtavg: Target avg for UNSIGNED data. If 0, set in code based on outbits\n");
   fprintf(stderr,"%s","                   1 float value between 0.0 and 100000.0\n");
   fprintf(stderr,"%s","                   default: `0.0'\n");
+  fprintf(stderr,"%s","      -filterbank: Raw data in SIGPROC filterbank format (single input file only)\n");
   fprintf(stderr,"%s","           -onlyI: Only output total intensity data\n");
   fprintf(stderr,"%s","    -adjustlevels: Adjust output scales and offsets every row (default is only row 0)\n");
   fprintf(stderr,"%s","         -weights: Filename containing ASCII list of channels and weights to use\n");
@@ -931,6 +934,11 @@ parseCmdline(int argc, char **argv)
       cmd.tgtavgC = i-keep;
       checkFloatLower("-tgtavg", &cmd.tgtavg, cmd.tgtavgC, 100000.0);
       checkFloatHigher("-tgtavg", &cmd.tgtavg, cmd.tgtavgC, 0.0);
+      continue;
+    }
+
+    if( 0==strcmp("-filterbank", argv[i]) ) {
+      cmd.filterbankP = 1;
       continue;
     }
 

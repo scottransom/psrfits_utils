@@ -13,6 +13,26 @@
 
 extern double delay_from_dm(double dm, double freq_emitted);
 extern int split_root_suffix(char *input, char **root, char **suffix);
+
+// Filterbank-input adapter (read_filterbank.c) -- see that file for the
+// rationale. These mirror psrfits_open()/psrfits_read_subint()/
+// psrfits_read_part_DATA() exactly, populating the same struct psrfits
+// fields so the rest of this file's logic is unaware of the input format.
+extern int filterbank_open(struct psrfits *pf);
+extern int filterbank_read_subint(struct psrfits *pf);
+extern int filterbank_read_part_DATA(struct psrfits *pf, int N, int numunsigned,
+                                     float *fbuffer);
+extern int filterbank_close(void);
+
+// Dispatch through function pointers so every existing call site (the
+// priming read in init_subbanding(), the per-row read in
+// get_current_row(), and the per-block peek in the main loop) picks up
+// filterbank input with no further changes, chosen once at startup based
+// on -filterbank.
+static int (*input_open)(struct psrfits *pf) = psrfits_open;
+static int (*input_read_subint)(struct psrfits *pf) = psrfits_read_subint;
+static int (*input_read_part_DATA)(struct psrfits *pf, int N, int numunsigned,
+                                   float *fbuffer) = psrfits_read_part_DATA;
 extern void avg_std(float *x, int n, double *mean, double *std, int stride);
 extern void split_path_file(char *input, char **path, char **file);
 extern void get_stokes_I(struct psrfits *pf);
@@ -275,7 +295,7 @@ int get_current_row(struct psrfits *pfi, struct subband_info *si) {
     if (num_pad_blocks==0) {  // Try to read the PSRFITS file
 
         // Read the current row of data
-        psrfits_read_subint(pfi);
+        input_read_subint(pfi);
         diff_offs = pfi->sub.offs - last_offs;
         // Handle if the file switched and the OFFS_SUB was reset
         if ((diff_offs < 0.0) && (pfi->hdr.MJD_epoch != orig_epoch)) {
@@ -436,7 +456,7 @@ void init_subbanding(struct psrfits *pfi, struct psrfits *pfo,
     }
 
     // Read the first row of data
-    psrfits_read_subint(pfi);
+    input_read_subint(pfi);
     if (si->userwgts) // Always overwrite if using user weights
         memcpy(pfi->sub.dat_weights, si->userwgts, pfi->hdr.nchan * sizeof(float));
 
@@ -676,14 +696,28 @@ int main(int argc, char *argv[]) {
     // Parse the command line using the excellent program Clig
     cmd = parseCmdline(argc, argv);
 
-    // Open the input PSRFITs files
-    psrfits_set_files(&pfi, cmd->argc, cmd->argv);
+    if (cmd->filterbankP) {
+        input_open = filterbank_open;
+        input_read_subint = filterbank_read_subint;
+        input_read_part_DATA = filterbank_read_part_DATA;
+        // Filterbank input: a single explicit file, no PSRFITS validation
+        // or dynamic sequence-number filename generation.
+        pfi.numfiles = cmd->argc;
+        pfi.filenum = 0;
+        pfi.filenames = cmd->argv;
+    } else {
+        // Open the input PSRFITs files
+        psrfits_set_files(&pfi, cmd->argc, cmd->argv);
+        // Use the dynamic filename allocation
+        if (pfi.numfiles==0) pfi.filenum = cmd->startfile;
+    }
 
-    // Use the dynamic filename allocation
-    if (pfi.numfiles==0) pfi.filenum = cmd->startfile;
     pfi.tot_rows = pfi.N = pfi.T = pfi.status = 0;
-    int rv = psrfits_open(&pfi);
-    if (rv) { fits_report_error(stderr, rv); exit(1); }
+    int rv = input_open(&pfi);
+    if (rv) {
+        if (!cmd->filterbankP) fits_report_error(stderr, rv);
+        exit(1);
+    }
 
     // Read the user weights if requested
     si.userwgts = NULL;
@@ -711,7 +745,7 @@ int main(int argc, char *argv[]) {
         // Put the overlapping parts from the next block into si->buffer
         float *ptr = pfi.sub.fdata + si.buflen * si.bufwid;
         if (padding==0)
-            stat = psrfits_read_part_DATA(&pfi, si.max_overlap, si.numunsigned, ptr);
+            stat = input_read_part_DATA(&pfi, si.max_overlap, si.numunsigned, ptr);
         if (stat || padding) { // Need to use padding since we ran out of data
             printf("Adding a missing row (#%d) of padding to the subbands.\n",
                    pfi.tot_rows);
@@ -782,8 +816,12 @@ int main(int argc, char *argv[]) {
         
     } while (pfi.status == 0);
     
-    rv = psrfits_close(&pfi);
-    if (rv>100) { fits_report_error(stderr, rv); }
+    if (cmd->filterbankP) {
+        filterbank_close();
+    } else {
+        rv = psrfits_close(&pfi);
+        if (rv>100) { fits_report_error(stderr, rv); }
+    }
     rv = psrfits_close(&pfo);
     if (rv>100) { fits_report_error(stderr, rv); }
     exit(0);
