@@ -49,6 +49,8 @@ typedef struct s_Cmdline {
   char tgtavgP;
   float tgtavg;
   int tgtavgC;
+  /***** -filterbank: Raw data in SIGPROC filterbank format */
+  char filterbankP;
   /***** -onlyI: Only output total intensity data */
   char onlyIP;
   /***** -adjustlevels: Adjust output scales and offsets every row (default is only row 0) */

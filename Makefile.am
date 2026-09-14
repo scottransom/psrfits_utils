@@ -31,7 +31,8 @@ fold_psrfits_LDFLAGS = @PTHREAD_CFLAGS@ $(AM_LDFLAGS)
 fold_psrfits_LDADD = libpsrfits_utils.la @PTHREAD_LIBS@
 
 psrfits_subband_SOURCES = psrfits_subband.c \
-			  psrfits_subband_cmd.h psrfits_subband_cmd.c
+			  psrfits_subband_cmd.h psrfits_subband_cmd.c \
+			  read_filterbank.c
 
 combine_mocks_SOURCES = combine_mocks.c \
 				   combine_mocks_cmd.h combine_mocks_cmd.c
